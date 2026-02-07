@@ -26,6 +26,14 @@ export interface AnalemmaInputs {
   year?: number;
 }
 
+export interface SunPathInputs {
+  latitudeDeg: number;
+  longitudeDeg: number;
+  tzOffsetHours: number;
+  date: Date;
+  stepMinutes?: number;
+}
+
 const deg2rad = (d: number) => (d * Math.PI) / 180;
 const rad2deg = (r: number) => (r * 180) / Math.PI;
 const normalizeDeg = (d: number) => ((d % 360) + 360) % 360;
@@ -65,6 +73,81 @@ function dateFromDayOfYear(year: number, day: number) {
   const mm = String(date.getUTCMonth() + 1).padStart(2, "0");
   const dd = String(date.getUTCDate()).padStart(2, "0");
   return `${yyyy}-${mm}-${dd}`;
+}
+
+function dayOfYearFromDateUTC(date: Date): number {
+  const y = date.getUTCFullYear();
+  const start = Date.UTC(y, 0, 0);
+  const utcMidnight = Date.UTC(y, date.getUTCMonth(), date.getUTCDate());
+  const diffDays = Math.floor((utcMidnight - start) / (24 * 60 * 60 * 1000));
+  return Math.max(1, diffDays);
+}
+
+function formatHHMM(totalMinutes: number) {
+  const m = ((totalMinutes % 1440) + 1440) % 1440;
+  const hh = Math.floor(m / 60);
+  const mm = Math.floor(m % 60);
+  return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+}
+
+export function computeSunPathPoints(inputs: SunPathInputs): AnalemmaPoint[] {
+  const year = inputs.date.getUTCFullYear();
+  const nDays = daysInYear(year);
+  const n = dayOfYearFromDateUTC(inputs.date);
+  const phi = deg2rad(inputs.latitudeDeg);
+
+  const gamma = (2 * Math.PI / nDays) * (n - 1 + 0.5);
+
+  const decl =
+    0.006918 -
+    0.399912 * Math.cos(gamma) +
+    0.070257 * Math.sin(gamma) -
+    0.006758 * Math.cos(2 * gamma) +
+    0.000907 * Math.sin(2 * gamma) -
+    0.002697 * Math.cos(3 * gamma) +
+    0.00148 * Math.sin(3 * gamma);
+
+  const eotMin = 229.18 * (
+    0.000075 +
+    0.001868 * Math.cos(gamma) -
+    0.032077 * Math.sin(gamma) -
+    0.014615 * Math.cos(2 * gamma) -
+    0.040849 * Math.sin(2 * gamma)
+  );
+
+  const tz = inputs.tzOffsetHours;
+  const LSTM = 15 * tz;
+  const timeOffsetMin = eotMin + 4 * (inputs.longitudeDeg - LSTM);
+
+  const step = Math.max(1, Math.round(inputs.stepMinutes ?? 5));
+  const points: AnalemmaPoint[] = [];
+
+  for (let localClockMinutes = 0; localClockMinutes < 1440; localClockMinutes += step) {
+    let trueSolarTimeMin = localClockMinutes + timeOffsetMin;
+    trueSolarTimeMin = ((trueSolarTimeMin % 1440) + 1440) % 1440;
+    const H_deg = trueSolarTimeMin / 4 - 180;
+    const H = deg2rad(H_deg);
+
+    const E = Math.cos(decl) * Math.sin(H);
+    const N = Math.cos(phi) * Math.sin(decl) - Math.sin(phi) * Math.cos(decl) * Math.cos(H);
+    const U = Math.sin(phi) * Math.sin(decl) + Math.cos(phi) * Math.cos(decl) * Math.cos(H);
+
+    const altitudeDeg = rad2deg(Math.asin(Math.max(-1, Math.min(1, U))));
+    const azimuthDeg = normalizeDeg(rad2deg(Math.atan2(E, N)));
+    const visible = altitudeDeg > 0;
+
+    points.push({
+      dateISO: formatHHMM(localClockMinutes),
+      azimuthDeg,
+      altitudeDeg,
+      visible,
+      E,
+      N,
+      U,
+    });
+  }
+
+  return points;
 }
 
 export function computeAnalemmaPoints(inputs: AnalemmaInputs): AnalemmaPoint[] {

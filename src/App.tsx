@@ -1,5 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { AnalemmaPoint, EotPoint, TimeMode, computeAnalemmaPoints, computeEquationOfTime } from './solar';
+import {
+  AnalemmaPoint,
+  EotPoint,
+  TimeMode,
+  computeAnalemmaPoints,
+  computeEquationOfTime,
+  computeSunPathPoints,
+} from './solar';
 import { getTimeZones } from '@vvo/tzdb';
 import { EquationOfTimeChart } from './EquationOfTimeChart';
 import { computeEnuDomainsAspectLocked } from './enuScaling';
@@ -17,6 +24,16 @@ type DomeSeries = {
   opacity: number;
   showPoints: boolean;
   isHighlighted: boolean;
+};
+
+type SunPathSeries = {
+  key: string;
+  label: string;
+  points: AnalemmaPoint[];
+  stroke: string;
+  strokeWidth: number;
+  opacity: number;
+  strokeDasharray?: string;
 };
 
 function useAnalemma(lat: number, lon: number, timeMode: TimeMode, tzOffsetHours: number) {
@@ -382,7 +399,15 @@ function AnalemmaChartSVG({ points, label }: { points: AnalemmaPoint[]; label: s
   );
 }
 
-function SkyDomeChartSVG({ series, label }: { series: DomeSeries[]; label: string }) {
+function SkyDomeChartSVG({
+  series,
+  sunPaths,
+  label,
+}: {
+  series: DomeSeries[];
+  sunPaths: SunPathSeries[];
+  label: string;
+}) {
   const [size, setSize] = useState<{ w: number; h: number }>({ w: 800, h: 560 });
   const containerRef = React.useRef<HTMLDivElement>(null);
 
@@ -509,6 +534,25 @@ function SkyDomeChartSVG({ series, label }: { series: DomeSeries[]; label: strin
 
         {visibleAny ? (
           <>
+            {sunPaths.map((sp) => {
+              const paths = buildPaths(sp.points);
+              return (
+                <g key={`${sp.key}-group`} data-series={sp.key}>
+                  {paths.map((d, idx) => (
+                    <path
+                      key={`${sp.key}-path-${idx}`}
+                      d={d}
+                      fill="none"
+                      stroke={sp.stroke}
+                      strokeWidth={sp.strokeWidth}
+                      opacity={sp.opacity}
+                      strokeDasharray={sp.strokeDasharray}
+                    />
+                  ))}
+                </g>
+              );
+            })}
+
             {series.map((s) => {
               const paths = buildPaths(s.points);
               return paths.map((d, idx) => (
@@ -544,6 +588,23 @@ function SkyDomeChartSVG({ series, label }: { series: DomeSeries[]; label: strin
                   <text x={20} y={9} fontWeight={s.isHighlighted ? 700 : 400}>
                     {s.label}
                   </text>
+                </g>
+              ))}
+            </g>
+
+            <g transform={`translate(${Math.max(8, w - 170)} 8)`} fontSize={10} fill="#555">
+              {sunPaths.map((sp, i) => (
+                <g key={`${sp.key}-legend`} transform={`translate(0 ${i * 14})`} opacity={sp.opacity}>
+                  <line
+                    x1={0}
+                    y1={7}
+                    x2={18}
+                    y2={7}
+                    stroke={sp.stroke}
+                    strokeWidth={sp.strokeWidth}
+                    strokeDasharray={sp.strokeDasharray}
+                  />
+                  <text x={24} y={10}>{sp.label}</text>
                 </g>
               ))}
             </g>
@@ -685,6 +746,56 @@ export default function App() {
 
     return [...base, highlight];
   }, [latitude, longitude, tzOffsetHours, hh, mm, points]);
+
+  const sunPathSeries = useMemo<SunPathSeries[]>(() => {
+    const now = new Date();
+    const localMs = now.getTime() + tzOffsetHours * 60 * 60 * 1000;
+    const localNow = new Date(localMs);
+    const y = localNow.getUTCFullYear();
+    const m = localNow.getUTCMonth();
+    const d = localNow.getUTCDate();
+    const todayDateUTC = new Date(Date.UTC(y, m, d));
+
+    const equinoxDateUTC = new Date(Date.UTC(y, 2, 20));
+    const juneSolsticeUTC = new Date(Date.UTC(y, 5, 21));
+    const decSolsticeUTC = new Date(Date.UTC(y, 11, 21));
+
+    return [
+      {
+        key: 'sunpath-today',
+        label: 'Today',
+        points: computeSunPathPoints({ latitudeDeg: latitude, longitudeDeg: longitude, tzOffsetHours, date: todayDateUTC, stepMinutes: 5 }),
+        stroke: '#f97316',
+        strokeWidth: 2.5,
+        opacity: 0.9,
+      },
+      {
+        key: 'sunpath-equinox',
+        label: 'Equinox',
+        points: computeSunPathPoints({ latitudeDeg: latitude, longitudeDeg: longitude, tzOffsetHours, date: equinoxDateUTC, stepMinutes: 5 }),
+        stroke: '#4b5563',
+        strokeWidth: 2,
+        opacity: 0.8,
+        strokeDasharray: '6 4',
+      },
+      {
+        key: 'sunpath-june',
+        label: 'June solstice',
+        points: computeSunPathPoints({ latitudeDeg: latitude, longitudeDeg: longitude, tzOffsetHours, date: juneSolsticeUTC, stepMinutes: 5 }),
+        stroke: '#16a34a',
+        strokeWidth: 2,
+        opacity: 0.8,
+      },
+      {
+        key: 'sunpath-dec',
+        label: 'December solstice',
+        points: computeSunPathPoints({ latitudeDeg: latitude, longitudeDeg: longitude, tzOffsetHours, date: decSolsticeUTC, stepMinutes: 5 }),
+        stroke: '#2563eb',
+        strokeWidth: 2,
+        opacity: 0.8,
+      },
+    ];
+  }, [latitude, longitude, tzOffsetHours]);
 
   // Calculate camera angle (center of analemma) using vector averaging
   // This converts each point to a 3D unit vector in ENU (East, North, Up) space,
@@ -1127,7 +1238,7 @@ export default function App() {
               <div className="chart-panel" aria-label="Sky dome (2D) chart">
                 <div className="chart-panel-body">
                   <div style={{ flex: 1, minHeight: 0 }}>
-                    <SkyDomeChartSVG series={domeSeries} label={locationLabel} />
+                    <SkyDomeChartSVG series={domeSeries} sunPaths={sunPathSeries} label={locationLabel} />
                   </div>
                 </div>
               </div>

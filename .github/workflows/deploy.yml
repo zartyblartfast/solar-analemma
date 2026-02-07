@@ -5,6 +5,9 @@ on:
     branches: [main]
   workflow_dispatch:
 
+env:
+  ARTIFACT_NAME: github-pages-${{ github.run_id }}-${{ github.run_attempt }}
+
 permissions:
   contents: read
   pages: write
@@ -39,6 +42,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
+          name: ${{ env.ARTIFACT_NAME }}
           path: ./dist
 
   deploy:
@@ -51,3 +55,5 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+        with:
+          artifact_name: ${{ env.ARTIFACT_NAME }}

@@ -870,26 +870,38 @@ export default function App() {
         </section>
 
         <section className="chart" aria-label="Analemma output">
-          <div style={{ maxWidth: 980, margin: '0 auto', width: '100%' }}>
-            <AnalemmaChartSVG points={points} label={locationLabel} />
-            <div style={{ marginTop: 8, fontSize: 12, color: '#666' }}>
-              <strong>Debug</strong>: visible={vis.length} {azMin !== undefined ? `| Az ${azMin.toFixed(1)}°…${azMax!.toFixed(1)}°` : ''} {altMinVis !== undefined ? `| Alt ${altMinVis.toFixed(1)}°…${altMaxVis!.toFixed(1)}°` : ''}
-              {cameraAzimuth !== undefined && cameraAltitude !== undefined && (
-                <span style={{ marginLeft: 16 }}>
-                  <strong>Camera Angle</strong>: {azimuthToDirection(cameraAzimuth)} ({cameraAzimuth.toFixed(1)}°), {cameraAltitude.toFixed(1)}° elevation
-                </span>
-              )}
+          <div className="chart-frame">
+            <div className="chart-top">
+              <div className="chart-panel" aria-label="Main analemma chart">
+                <div className="chart-panel-body">
+                  <AnalemmaChartSVG points={points} label={locationLabel} />
+                  <div style={{ marginTop: 8, fontSize: 12, color: '#666' }}>
+                    <strong>Debug</strong>: visible={vis.length} {azMin !== undefined ? `| Az ${azMin.toFixed(1)}°…${azMax!.toFixed(1)}°` : ''} {altMinVis !== undefined ? `| Alt ${altMinVis.toFixed(1)}°…${altMaxVis!.toFixed(1)}°` : ''}
+                    {cameraAzimuth !== undefined && cameraAltitude !== undefined && (
+                      <span style={{ marginLeft: 16 }}>
+                        <strong>Camera Angle</strong>: {azimuthToDirection(cameraAzimuth)} ({cameraAzimuth.toFixed(1)}°), {cameraAltitude.toFixed(1)}° elevation
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="chart-panel" aria-label="Sky dome (2D) chart">
+                <div className="chart-panel-body" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#666' }}>
+                  2D sky-dome diagram (coming next)
+                </div>
+              </div>
             </div>
-          </div>
-          
-          <div style={{ marginTop: 24 }}>
-            <EquationOfTimeChart 
-              points={eotPoints} 
-              latitude={latitude}
-              longitude={longitude}
-              timeMode={timeMode}
-              tzOffsetHours={tzOffsetHours}
-            />
+
+            <div style={{ marginTop: 24 }}>
+              <EquationOfTimeChart
+                points={eotPoints}
+                latitude={latitude}
+                longitude={longitude}
+                timeMode={timeMode}
+                tzOffsetHours={tzOffsetHours}
+              />
+            </div>
           </div>
         </section>
       </main>

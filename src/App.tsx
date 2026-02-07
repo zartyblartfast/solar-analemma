@@ -195,7 +195,7 @@ function AnalemmaChartSVG({ points, label }: { points: AnalemmaPoint[]; label: s
   }
 
   return (
-    <div ref={containerRef} style={{ width: '100%', height: '500px' }}>
+    <div ref={containerRef} style={{ width: '100%', height: '100%' }}>
       <svg viewBox={`0 0 ${size.w} ${size.h}`} width="100%" height="100%" role="img" aria-label="Sun analemma chart">
         <rect x={0} y={0} width={size.w} height={size.h} fill="#fff" />
         {/* Axes */}
@@ -366,6 +366,156 @@ function AnalemmaChartSVG({ points, label }: { points: AnalemmaPoint[]; label: s
             </g>
           );
         })}
+      </svg>
+    </div>
+  );
+}
+
+function SkyDomeChartSVG({ points, label }: { points: AnalemmaPoint[]; label: string }) {
+  const [size, setSize] = useState<{ w: number; h: number }>({ w: 800, h: 560 });
+  const containerRef = React.useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      setSize({ w: el.clientWidth, h: el.clientHeight });
+    });
+    ro.observe(el);
+    setSize({ w: el.clientWidth, h: el.clientHeight });
+    return () => ro.disconnect();
+  }, []);
+
+  const visible = points.filter(p => p.visible);
+  const hasVisible = visible.length > 0;
+
+  const w = Math.max(1, size.w);
+  const h = Math.max(1, size.h);
+  const padding = 40;
+  const cx = w / 2;
+  const cy = h / 2;
+  const R = Math.max(1, Math.min(w, h) / 2 - padding);
+
+  const project = (azDeg: number, altDeg: number) => {
+    const theta = (azDeg * Math.PI) / 180;
+    const r = R * (1 - altDeg / 90);
+    const x = cx + r * Math.sin(theta);
+    const y = cy - r * Math.cos(theta);
+    return { x, y };
+  };
+
+  const paths: string[] = [];
+  if (hasVisible) {
+    const JUMP_THRESHOLD = R * 0.35;
+    let currentSegment: string[] = [];
+    let prev: { x: number; y: number } | undefined;
+
+    for (let i = 0; i < visible.length; i++) {
+      const p = visible[i];
+      const { x, y } = project(p.azimuthDeg, p.altitudeDeg);
+      const shouldBreak = prev ? Math.hypot(x - prev.x, y - prev.y) > JUMP_THRESHOLD : false;
+
+      if (shouldBreak && currentSegment.length > 0) {
+        paths.push(currentSegment.join(' '));
+        currentSegment = [];
+      }
+
+      const cmd = currentSegment.length === 0 ? 'M' : 'L';
+      currentSegment.push(`${cmd} ${x.toFixed(2)} ${y.toFixed(2)}`);
+      prev = { x, y };
+    }
+
+    if (currentSegment.length > 0) {
+      paths.push(currentSegment.join(' '));
+    }
+  }
+
+  const altitudeRings = [10, 20, 30, 40, 50, 60, 70, 80];
+  const spokeDegs = Array.from({ length: 12 }, (_, i) => i * 30);
+  const tickDegs = Array.from({ length: 36 }, (_, i) => i * 10);
+
+  return (
+    <div ref={containerRef} style={{ width: '100%', height: '100%' }}>
+      <svg viewBox={`0 0 ${w} ${h}`} width="100%" height="100%" role="img" aria-label="Sky dome chart">
+        <rect x={0} y={0} width={w} height={h} fill="#fff" />
+
+        <circle cx={cx} cy={cy} r={R} fill="#fff" stroke="#ddd" />
+
+        {altitudeRings.map((alt) => {
+          const r = R * (1 - alt / 90);
+          const y = cy - r;
+          return (
+            <g key={`ring-${alt}`}>
+              <circle cx={cx} cy={cy} r={r} fill="none" stroke="#f0f0f0" />
+              <text x={cx} y={y - 4} fontSize={10} fill="#999" textAnchor="middle">
+                {alt}°
+              </text>
+            </g>
+          );
+        })}
+
+        {spokeDegs.map((deg) => {
+          const theta = (deg * Math.PI) / 180;
+          const x2 = cx + R * Math.sin(theta);
+          const y2 = cy - R * Math.cos(theta);
+          const isCardinal = deg % 90 === 0;
+          return <line key={`spoke-${deg}`} x1={cx} y1={cy} x2={x2} y2={y2} stroke={isCardinal ? '#e6e6e6' : '#f2f2f2'} />;
+        })}
+
+        {tickDegs.map((deg) => {
+          const theta = (deg * Math.PI) / 180;
+          const major = deg % 30 === 0;
+          const r0 = R;
+          const r1 = R + (major ? 10 : 6);
+          const x0 = cx + r0 * Math.sin(theta);
+          const y0 = cy - r0 * Math.cos(theta);
+          const x1 = cx + r1 * Math.sin(theta);
+          const y1 = cy - r1 * Math.cos(theta);
+          return <line key={`tick-${deg}`} x1={x0} y1={y0} x2={x1} y2={y1} stroke="#bbb" />;
+        })}
+
+        {spokeDegs.map((deg) => {
+          const theta = (deg * Math.PI) / 180;
+          const rLabel = R + 22;
+          const x = cx + rLabel * Math.sin(theta);
+          const y = cy - rLabel * Math.cos(theta);
+
+          let textAnchor: 'start' | 'middle' | 'end' = 'middle';
+          if (deg > 0 && deg < 180) textAnchor = 'start';
+          if (deg > 180 && deg < 360) textAnchor = 'end';
+
+          return (
+            <text key={`az-${deg}`} x={x} y={y + 3} fontSize={10} fill="#777" textAnchor={textAnchor}>
+              {deg}°
+            </text>
+          );
+        })}
+
+        <text x={cx} y={cy - R - 14} fontSize={12} fill="#b00020" fontWeight={700} textAnchor="middle">N</text>
+        <text x={cx + R + 14} y={cy + 4} fontSize={12} fill="#b00020" fontWeight={700} textAnchor="middle">E</text>
+        <text x={cx} y={cy + R + 26} fontSize={12} fill="#b00020" fontWeight={700} textAnchor="middle">S</text>
+        <text x={cx - R - 14} y={cy + 4} fontSize={12} fill="#b00020" fontWeight={700} textAnchor="middle">W</text>
+
+        {hasVisible ? (
+          <>
+            {paths.map((d, idx) => (
+              <path key={`path-${idx}`} d={d} fill="none" stroke="#0b6cfb" strokeWidth={2} />
+            ))}
+            {visible.map((p, idx) => {
+              const { x, y } = project(p.azimuthDeg, p.altitudeDeg);
+              return (
+                <g key={`pt-${idx}`}>
+                  <circle cx={x} cy={y} r={2.25} fill="#0b6cfb" stroke="#084fc8" strokeWidth={0.5} />
+                  <title>{`${label}\n${p.dateISO}\nAlt ${p.altitudeDeg.toFixed(1)}°, Az ${p.azimuthDeg.toFixed(1)}°`}</title>
+                </g>
+              );
+            })}
+          </>
+        ) : (
+          <text x={cx} y={cy} textAnchor="middle" fill="#777">
+            No daylight at this solar time for this location.
+          </text>
+        )}
       </svg>
     </div>
   );
@@ -874,8 +1024,10 @@ export default function App() {
             <div className="chart-top">
               <div className="chart-panel" aria-label="Main analemma chart">
                 <div className="chart-panel-body">
-                  <AnalemmaChartSVG points={points} label={locationLabel} />
-                  <div style={{ marginTop: 8, fontSize: 12, color: '#666' }}>
+                  <div style={{ flex: 1, minHeight: 0 }}>
+                    <AnalemmaChartSVG points={points} label={locationLabel} />
+                  </div>
+                  <div style={{ marginTop: 8, fontSize: 12, color: '#666', flex: '0 0 auto' }}>
                     <strong>Debug</strong>: visible={vis.length} {azMin !== undefined ? `| Az ${azMin.toFixed(1)}°…${azMax!.toFixed(1)}°` : ''} {altMinVis !== undefined ? `| Alt ${altMinVis.toFixed(1)}°…${altMaxVis!.toFixed(1)}°` : ''}
                     {cameraAzimuth !== undefined && cameraAltitude !== undefined && (
                       <span style={{ marginLeft: 16 }}>
@@ -887,8 +1039,10 @@ export default function App() {
               </div>
 
               <div className="chart-panel" aria-label="Sky dome (2D) chart">
-                <div className="chart-panel-body" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#666' }}>
-                  2D sky-dome diagram (coming next)
+                <div className="chart-panel-body">
+                  <div style={{ flex: 1, minHeight: 0 }}>
+                    <SkyDomeChartSVG points={points} label={locationLabel} />
+                  </div>
                 </div>
               </div>
             </div>

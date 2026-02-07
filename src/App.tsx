@@ -8,6 +8,17 @@ function clamp(n: number, min: number, max: number) {
   return Math.min(max, Math.max(min, n));
 }
 
+type DomeSeries = {
+  key: string;
+  label: string;
+  points: AnalemmaPoint[];
+  stroke: string;
+  strokeWidth: number;
+  opacity: number;
+  showPoints: boolean;
+  isHighlighted: boolean;
+};
+
 function useAnalemma(lat: number, lon: number, timeMode: TimeMode, tzOffsetHours: number) {
   return useMemo<AnalemmaPoint[]>(() => {
     return computeAnalemmaPoints({ latitudeDeg: lat, longitudeDeg: lon, timeMode, tzOffsetHours });
@@ -371,7 +382,7 @@ function AnalemmaChartSVG({ points, label }: { points: AnalemmaPoint[]; label: s
   );
 }
 
-function SkyDomeChartSVG({ points, label }: { points: AnalemmaPoint[]; label: string }) {
+function SkyDomeChartSVG({ series, label }: { series: DomeSeries[]; label: string }) {
   const [size, setSize] = useState<{ w: number; h: number }>({ w: 800, h: 560 });
   const containerRef = React.useRef<HTMLDivElement>(null);
 
@@ -386,8 +397,7 @@ function SkyDomeChartSVG({ points, label }: { points: AnalemmaPoint[]; label: st
     return () => ro.disconnect();
   }, []);
 
-  const visible = points.filter(p => p.visible);
-  const hasVisible = visible.length > 0;
+  const visibleAny = series.some(s => s.points.some(p => p.visible));
 
   const w = Math.max(1, size.w);
   const h = Math.max(1, size.h);
@@ -404,9 +414,11 @@ function SkyDomeChartSVG({ points, label }: { points: AnalemmaPoint[]; label: st
     return { x, y };
   };
 
-  const paths: string[] = [];
-  if (hasVisible) {
-    const JUMP_THRESHOLD = R * 0.35;
+  const JUMP_THRESHOLD = R * 0.35;
+  const buildPaths = (pts: AnalemmaPoint[]) => {
+    const visible = pts.filter(p => p.visible);
+    const paths: string[] = [];
+    if (visible.length === 0) return paths;
     let currentSegment: string[] = [];
     let prev: { x: number; y: number } | undefined;
 
@@ -414,12 +426,10 @@ function SkyDomeChartSVG({ points, label }: { points: AnalemmaPoint[]; label: st
       const p = visible[i];
       const { x, y } = project(p.azimuthDeg, p.altitudeDeg);
       const shouldBreak = prev ? Math.hypot(x - prev.x, y - prev.y) > JUMP_THRESHOLD : false;
-
       if (shouldBreak && currentSegment.length > 0) {
         paths.push(currentSegment.join(' '));
         currentSegment = [];
       }
-
       const cmd = currentSegment.length === 0 ? 'M' : 'L';
       currentSegment.push(`${cmd} ${x.toFixed(2)} ${y.toFixed(2)}`);
       prev = { x, y };
@@ -428,7 +438,8 @@ function SkyDomeChartSVG({ points, label }: { points: AnalemmaPoint[]; label: st
     if (currentSegment.length > 0) {
       paths.push(currentSegment.join(' '));
     }
-  }
+    return paths;
+  };
 
   const altitudeRings = [10, 20, 30, 40, 50, 60, 70, 80];
   const spokeDegs = Array.from({ length: 12 }, (_, i) => i * 30);
@@ -496,20 +507,46 @@ function SkyDomeChartSVG({ points, label }: { points: AnalemmaPoint[]; label: st
         <text x={cx} y={cy + R + 26} fontSize={12} fill="#b00020" fontWeight={700} textAnchor="middle">S</text>
         <text x={cx - R - 14} y={cy + 4} fontSize={12} fill="#b00020" fontWeight={700} textAnchor="middle">W</text>
 
-        {hasVisible ? (
+        {visibleAny ? (
           <>
-            {paths.map((d, idx) => (
-              <path key={`path-${idx}`} d={d} fill="none" stroke="#0b6cfb" strokeWidth={2} />
-            ))}
-            {visible.map((p, idx) => {
-              const { x, y } = project(p.azimuthDeg, p.altitudeDeg);
-              return (
-                <g key={`pt-${idx}`}>
-                  <circle cx={x} cy={y} r={2.25} fill="#0b6cfb" stroke="#084fc8" strokeWidth={0.5} />
-                  <title>{`${label}\n${p.dateISO}\nAlt ${p.altitudeDeg.toFixed(1)}°, Az ${p.azimuthDeg.toFixed(1)}°`}</title>
-                </g>
-              );
+            {series.map((s) => {
+              const paths = buildPaths(s.points);
+              return paths.map((d, idx) => (
+                <path
+                  key={`${s.key}-path-${idx}`}
+                  d={d}
+                  fill="none"
+                  stroke={s.stroke}
+                  strokeWidth={s.strokeWidth}
+                  opacity={s.opacity}
+                />
+              ));
             })}
+
+            {series.map((s) => {
+              if (!s.showPoints) return null;
+              const visiblePts = s.points.filter(p => p.visible);
+              return visiblePts.map((p, idx) => {
+                const { x, y } = project(p.azimuthDeg, p.altitudeDeg);
+                return (
+                  <g key={`${s.key}-pt-${idx}`} opacity={s.opacity}>
+                    <circle cx={x} cy={y} r={2.25} fill={s.stroke} stroke="#084fc8" strokeWidth={0.5} />
+                    <title>{`${label}\n${s.label}\n${p.dateISO}\nAlt ${p.altitudeDeg.toFixed(1)}°, Az ${p.azimuthDeg.toFixed(1)}°`}</title>
+                  </g>
+                );
+              });
+            })}
+
+            <g transform="translate(8 8)" fontSize={9} fill="#666">
+              {series.map((s, i) => (
+                <g key={`${s.key}-legend`} transform={`translate(0 ${i * 12})`} opacity={s.opacity}>
+                  <line x1={0} y1={6} x2={16} y2={6} stroke={s.stroke} strokeWidth={s.strokeWidth} />
+                  <text x={20} y={9} fontWeight={s.isHighlighted ? 700 : 400}>
+                    {s.label}
+                  </text>
+                </g>
+              ))}
+            </g>
           </>
         ) : (
           <text x={cx} y={cy} textAnchor="middle" fill="#777">
@@ -599,6 +636,55 @@ export default function App() {
   const azMax = vis.length ? Math.max(...vis.map(p => p.azimuthDeg)) : undefined;
   const altMinVis = vis.length ? Math.min(...vis.map(p => p.altitudeDeg)) : undefined;
   const altMaxVis = vis.length ? Math.max(...vis.map(p => p.altitudeDeg)) : undefined;
+
+  const domeSeries = useMemo<DomeSeries[]>(() => {
+    const base: DomeSeries[] = [];
+    for (let hour = 6; hour <= 18; hour++) {
+      const t = (hour - 6) / 12;
+      const hue = 220 - 180 * t;
+      const stroke = `hsl(${hue.toFixed(0)} 80% 45%)`;
+      base.push({
+        key: `h${hour}`,
+        label: `${String(hour).padStart(2, '0')}:00`,
+        points: computeAnalemmaPoints({
+          latitudeDeg: latitude,
+          longitudeDeg: longitude,
+          timeMode: { kind: 'fixedLocalTime', hh: hour, mm: 0 },
+          tzOffsetHours,
+        }),
+        stroke,
+        strokeWidth: 1.5,
+        opacity: 0.5,
+        showPoints: false,
+        isHighlighted: false,
+      });
+    }
+
+    const selectedLabel = `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+    const existing = mm === 0 && hh >= 6 && hh <= 18 ? base.find(s => s.key === `h${hh}`) : undefined;
+
+    if (existing) {
+      existing.isHighlighted = true;
+      existing.opacity = 0.95;
+      existing.strokeWidth = 2.75;
+      existing.showPoints = true;
+      return base;
+    }
+
+    const highlightStroke = 'hsl(220 90% 40%)';
+    const highlight: DomeSeries = {
+      key: `sel-${hh}-${mm}`,
+      label: selectedLabel,
+      points: points,
+      stroke: highlightStroke,
+      strokeWidth: 2.75,
+      opacity: 0.95,
+      showPoints: true,
+      isHighlighted: true,
+    };
+
+    return [...base, highlight];
+  }, [latitude, longitude, tzOffsetHours, hh, mm, points]);
 
   // Calculate camera angle (center of analemma) using vector averaging
   // This converts each point to a 3D unit vector in ENU (East, North, Up) space,
@@ -1041,7 +1127,7 @@ export default function App() {
               <div className="chart-panel" aria-label="Sky dome (2D) chart">
                 <div className="chart-panel-body">
                   <div style={{ flex: 1, minHeight: 0 }}>
-                    <SkyDomeChartSVG points={points} label={locationLabel} />
+                    <SkyDomeChartSVG series={domeSeries} label={locationLabel} />
                   </div>
                 </div>
               </div>

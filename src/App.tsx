@@ -64,7 +64,15 @@ function CardinalLabels({ width, height }: { width: number; height: number }) {
   );
 }
 
-function AnalemmaChartSVG({ points, label }: { points: AnalemmaPoint[]; label: string }) {
+function AnalemmaChartSVG({
+  points,
+  label,
+  view,
+}: {
+  points: AnalemmaPoint[];
+  label: string;
+  view: 'enu-eu' | 'az-alt' | 'polar';
+}) {
   const [size, setSize] = useState<{ w: number; h: number }>({ w: 800, h: 560 });
   const containerRef = React.useRef<HTMLDivElement>(null);
 
@@ -82,94 +90,273 @@ function AnalemmaChartSVG({ points, label }: { points: AnalemmaPoint[]; label: s
   const padding = 40;
   const visible = points.filter(p => p.visible);
   const hasVisible = visible.length > 0;
-
-  // ENU coordinates are now computed directly in solar.ts (stable, no azimuth singularity)
-  // We'll plot E (horizontal) vs U (vertical) for a clean figure-8
-  const eMin = hasVisible ? Math.min(...visible.map(p => p.E)) : -1;
-  const eMax = hasVisible ? Math.max(...visible.map(p => p.E)) : 1;
-  const uMin = hasVisible ? Math.min(...visible.map(p => p.U)) : 0;
-  const uMax = hasVisible ? Math.max(...visible.map(p => p.U)) : 1;
-
   const plotWidthPx = Math.max(1, size.w - 2 * padding);
   const plotHeightPx = Math.max(1, size.h - 2 * padding);
-  const { eDomain, uDomain } = computeEnuDomainsAspectLocked({
-    eMin,
-    eMax,
-    uMin,
-    uMax,
-    plotWidthPx,
-    plotHeightPx,
-    padFraction: 0.1,
-    minPadE: 0.1,
-    minPadU: 0.05,
-    minSpan: 1e-6,
-  });
 
-  // Scale functions for ENU coordinates
-  const xScale = (e: number) => {
-    const span = Math.max(1e-6, eDomain[1] - eDomain[0]);
-    return padding + ((e - eDomain[0]) / span) * plotWidthPx;
-  };
-  const yScale = (u: number) => {
-    const span = Math.max(1e-6, uDomain[1] - uDomain[0]);
-    return padding + (1 - (u - uDomain[0]) / span) * plotHeightPx;
-  };
+  if (view === 'polar') {
+    const w = Math.max(1, size.w);
+    const h = Math.max(1, size.h);
+    const cx = w / 2;
+    const cy = h / 2;
+    const R = Math.max(1, Math.min(w, h) / 2 - padding);
 
-  const xTicks = Array.from({ length: 6 }).map((_, i) => eDomain[0] + (i * (eDomain[1] - eDomain[0])) / 5);
-  const yTicks = Array.from({ length: 6 }).map((_, i) => uDomain[0] + (i * (uDomain[1] - uDomain[0])) / 5);
+    const project = (azDeg: number, altDeg: number) => {
+      const theta = (azDeg * Math.PI) / 180;
+      const r = R * (1 - altDeg / 90);
+      const x = cx + r * Math.sin(theta);
+      const y = cy - r * Math.cos(theta);
+      return { x, y };
+    };
 
-  // Build path with breaks near zenith to avoid rendering through singularity
-  const paths: string[] = [];
-  if (hasVisible && visible.length > 0) {
-    const ZENITH_ALT_THRESHOLD = 89.0; // Break path above this altitude
-    const ENU_JUMP_THRESHOLD = 0.3; // Break if E or N jumps by more than this
-    let currentSegment: string[] = [];
-    let zenithBreakCount = 0;
-
-    for (let i = 0; i < visible.length; i++) {
-      const p = visible[i];
-      let shouldBreak = false;
-
-      // Break if altitude is very high
-      if (p.altitudeDeg > ZENITH_ALT_THRESHOLD) {
-        shouldBreak = true;
-      }
-
-      // Break if E or N jumps significantly (indicates numerical instability)
-      if (i > 0 && !shouldBreak) {
-        const prev = visible[i - 1];
-        const deltaE = Math.abs(p.E - prev.E);
-        const deltaN = Math.abs(p.N - prev.N);
-        if (deltaE > ENU_JUMP_THRESHOLD || deltaN > ENU_JUMP_THRESHOLD) {
-          shouldBreak = true;
+    const buildPolarPaths = (pts: AnalemmaPoint[]) => {
+      const vis = pts.filter(p => p.visible);
+      const paths: string[] = [];
+      if (vis.length === 0) return paths;
+      let current: string[] = [];
+      let prev: { x: number; y: number } | undefined;
+      const JUMP_THRESHOLD = R * 0.35;
+      for (let i = 0; i < vis.length; i++) {
+        const p = vis[i];
+        const { x, y } = project(p.azimuthDeg, p.altitudeDeg);
+        const shouldBreak = prev ? Math.hypot(x - prev.x, y - prev.y) > JUMP_THRESHOLD : false;
+        if (shouldBreak && current.length > 0) {
+          paths.push(current.join(' '));
+          current = [];
         }
+        const cmd = current.length === 0 ? 'M' : 'L';
+        current.push(`${cmd} ${x.toFixed(2)} ${y.toFixed(2)}`);
+        prev = { x, y };
       }
+      if (current.length > 0) paths.push(current.join(' '));
+      return paths;
+    };
 
-      if (shouldBreak) {
-        // Finish current segment if it has points
-        if (currentSegment.length > 0) {
+    const polarPaths = buildPolarPaths(points);
+    const altitudeRings = [10, 20, 30, 40, 50, 60, 70, 80];
+    const spokeDegs = Array.from({ length: 12 }, (_, i) => i * 30);
+    const tickDegs = Array.from({ length: 36 }, (_, i) => i * 10);
+
+    return (
+      <div ref={containerRef} style={{ width: '100%', height: '100%' }}>
+        <svg viewBox={`0 0 ${w} ${h}`} width="100%" height="100%" role="img" aria-label="Sun analemma chart">
+          <rect x={0} y={0} width={w} height={h} fill="#fff" />
+          <circle cx={cx} cy={cy} r={R} fill="#fff" stroke="#ddd" />
+
+          {altitudeRings.map((alt) => {
+            const r = R * (1 - alt / 90);
+            const y = cy - r;
+            return (
+              <g key={`ring-${alt}`}>
+                <circle cx={cx} cy={cy} r={r} fill="none" stroke="#f0f0f0" />
+                <text x={cx} y={y - 4} fontSize={10} fill="#999" textAnchor="middle">
+                  {alt}°
+                </text>
+              </g>
+            );
+          })}
+
+          {spokeDegs.map((deg) => {
+            const theta = (deg * Math.PI) / 180;
+            const x2 = cx + R * Math.sin(theta);
+            const y2 = cy - R * Math.cos(theta);
+            const isCardinal = deg % 90 === 0;
+            return <line key={`spoke-${deg}`} x1={cx} y1={cy} x2={x2} y2={y2} stroke={isCardinal ? '#e6e6e6' : '#f2f2f2'} />;
+          })}
+
+          {tickDegs.map((deg) => {
+            const theta = (deg * Math.PI) / 180;
+            const major = deg % 30 === 0;
+            const r0 = R;
+            const r1 = R + (major ? 10 : 6);
+            const x0 = cx + r0 * Math.sin(theta);
+            const y0 = cy - r0 * Math.cos(theta);
+            const x1 = cx + r1 * Math.sin(theta);
+            const y1 = cy - r1 * Math.cos(theta);
+            return <line key={`tick-${deg}`} x1={x0} y1={y0} x2={x1} y2={y1} stroke="#bbb" />;
+          })}
+
+          {spokeDegs.map((deg) => {
+            const theta = (deg * Math.PI) / 180;
+            const rLabel = R + 22;
+            const x = cx + rLabel * Math.sin(theta);
+            const y = cy - rLabel * Math.cos(theta);
+            let textAnchor: 'start' | 'middle' | 'end' = 'middle';
+            if (deg > 0 && deg < 180) textAnchor = 'start';
+            if (deg > 180 && deg < 360) textAnchor = 'end';
+            return (
+              <text key={`az-${deg}`} x={x} y={y + 3} fontSize={10} fill="#777" textAnchor={textAnchor}>
+                {deg}°
+              </text>
+            );
+          })}
+
+          <text x={cx} y={cy - R - 14} fontSize={12} fill="#b00020" fontWeight={700} textAnchor="middle">N</text>
+          <text x={cx + R + 14} y={cy + 4} fontSize={12} fill="#b00020" fontWeight={700} textAnchor="middle">E</text>
+          <text x={cx} y={cy + R + 26} fontSize={12} fill="#b00020" fontWeight={700} textAnchor="middle">S</text>
+          <text x={cx - R - 14} y={cy + 4} fontSize={12} fill="#b00020" fontWeight={700} textAnchor="middle">W</text>
+
+          {hasVisible ? (
+            <>
+              {polarPaths.map((d, idx) => (
+                <path key={`polar-path-${idx}`} d={d} fill="none" stroke="#0b6cfb" strokeWidth={2} />
+              ))}
+              {visible.map((p, idx) => {
+                const { x, y } = project(p.azimuthDeg, p.altitudeDeg);
+                return (
+                  <g key={`polar-pt-${idx}`}>
+                    <circle cx={x} cy={y} r={2.25} fill="#0b6cfb" stroke="#084fc8" strokeWidth={0.5} />
+                    <title>{`${label}\n${p.dateISO}\nAlt ${p.altitudeDeg.toFixed(1)}°, Az ${p.azimuthDeg.toFixed(1)}°`}</title>
+                  </g>
+                );
+              })}
+            </>
+          ) : (
+            <text x={cx} y={cy} textAnchor="middle" fill="#777">No daylight at this solar time for this location.</text>
+          )}
+        </svg>
+      </div>
+    );
+  }
+
+  const paths: string[] = [];
+
+  let xScale: (v: number) => number;
+  let yScale: (v: number) => number;
+  let xTicks: number[] = [];
+  let yTicks: number[] = [];
+  const azLabelFor = (azUnwrappedDeg: number) => {
+    const norm = ((azUnwrappedDeg % 360) + 360) % 360;
+    return norm;
+  };
+
+  if (view === 'az-alt') {
+    const azVals = hasVisible ? visible.map(p => p.azimuthDeg) : [];
+    const refAz = azVals.length ? azVals.sort((a, b) => a - b)[Math.floor(azVals.length / 2)] : 180;
+    const unwrapAz = (azDeg: number) => {
+      const d = ((azDeg - refAz + 540) % 360) - 180;
+      return refAz + d;
+    };
+
+    const azUnwrapped = hasVisible ? visible.map(p => unwrapAz(p.azimuthDeg)) : [];
+    const azMin = azUnwrapped.length ? Math.min(...azUnwrapped) : 0;
+    const azMax = azUnwrapped.length ? Math.max(...azUnwrapped) : 360;
+    const azSpan = Math.max(1e-6, azMax - azMin);
+    const azPad = Math.max(10, azSpan * 0.15);
+    let azDomainMin = azMin - azPad;
+    let azDomainMax = azMax + azPad;
+    let azDomainSpan = Math.max(1e-6, azDomainMax - azDomainMin);
+
+    // If the analemma is near the meridian (midday-ish), the true azimuth span can be small.
+    // Auto-zooming too tightly exaggerates tiny azimuth changes and makes the curve look “rotated”.
+    // Enforce a minimum azimuth span to keep a stable, interpretable orientation.
+    const MIN_AZ_SPAN_DEG = 120;
+    if (azDomainSpan < MIN_AZ_SPAN_DEG) {
+      const mid = (azDomainMin + azDomainMax) / 2;
+      azDomainMin = mid - MIN_AZ_SPAN_DEG / 2;
+      azDomainMax = mid + MIN_AZ_SPAN_DEG / 2;
+      azDomainSpan = Math.max(1e-6, azDomainMax - azDomainMin);
+    }
+
+    xScale = (azUnwrappedDeg: number) => padding + ((azUnwrappedDeg - azDomainMin) / azDomainSpan) * plotWidthPx;
+    yScale = (altDeg: number) => padding + (1 - altDeg / 90) * plotHeightPx;
+
+    const tickStep = azDomainSpan <= 80 ? 10 : azDomainSpan <= 160 ? 20 : 30;
+    const tickStart = Math.ceil(azDomainMin / tickStep) * tickStep;
+    const tickEnd = Math.floor(azDomainMax / tickStep) * tickStep;
+    xTicks = [];
+    for (let t = tickStart; t <= tickEnd; t += tickStep) xTicks.push(t);
+    yTicks = Array.from({ length: 7 }, (_, i) => i * 15);
+
+    if (hasVisible) {
+      let currentSegment: string[] = [];
+      let prevAzU: number | undefined;
+      for (let i = 0; i < visible.length; i++) {
+        const p = visible[i];
+        const azU = unwrapAz(p.azimuthDeg);
+        const shouldBreak = prevAzU !== undefined ? Math.abs(azU - prevAzU) > 180 : false;
+        if (shouldBreak && currentSegment.length > 0) {
           paths.push(currentSegment.join(' '));
           currentSegment = [];
         }
-        // Skip this point (don't draw through singularity)
-        zenithBreakCount++;
-      } else {
-        // Add point to current segment
         const cmd = currentSegment.length === 0 ? 'M' : 'L';
-        currentSegment.push(`${cmd} ${xScale(p.E).toFixed(2)} ${yScale(p.U).toFixed(2)}`);
+        currentSegment.push(`${cmd} ${xScale(azU).toFixed(2)} ${yScale(p.altitudeDeg).toFixed(2)}`);
+        prevAzU = azU;
+      }
+      if (currentSegment.length > 0) {
+        paths.push(currentSegment.join(' '));
       }
     }
+  } else {
+    const eMin = hasVisible ? Math.min(...visible.map(p => p.E)) : -1;
+    const eMax = hasVisible ? Math.max(...visible.map(p => p.E)) : 1;
+    const uMin = hasVisible ? Math.min(...visible.map(p => p.U)) : 0;
+    const uMax = hasVisible ? Math.max(...visible.map(p => p.U)) : 1;
 
-    // Add final segment if any
-    if (currentSegment.length > 0) {
-      paths.push(currentSegment.join(' '));
+    const { eDomain, uDomain } = computeEnuDomainsAspectLocked({
+      eMin,
+      eMax,
+      uMin,
+      uMax,
+      plotWidthPx,
+      plotHeightPx,
+      padFraction: 0.1,
+      minPadE: 0.1,
+      minPadU: 0.05,
+      minSpan: 1e-6,
+    });
+
+    xScale = (e: number) => {
+      const span = Math.max(1e-6, eDomain[1] - eDomain[0]);
+      return padding + ((e - eDomain[0]) / span) * plotWidthPx;
+    };
+    yScale = (u: number) => {
+      const span = Math.max(1e-6, uDomain[1] - uDomain[0]);
+      return padding + (1 - (u - uDomain[0]) / span) * plotHeightPx;
+    };
+
+    xTicks = Array.from({ length: 6 }).map((_, i) => eDomain[0] + (i * (eDomain[1] - eDomain[0])) / 5);
+    yTicks = Array.from({ length: 6 }).map((_, i) => uDomain[0] + (i * (uDomain[1] - uDomain[0])) / 5);
+
+    if (hasVisible && visible.length > 0) {
+      const ZENITH_ALT_THRESHOLD = 89.0;
+      const ENU_JUMP_THRESHOLD = 0.3;
+      let currentSegment: string[] = [];
+
+      for (let i = 0; i < visible.length; i++) {
+        const p = visible[i];
+        let shouldBreak = false;
+        if (p.altitudeDeg > ZENITH_ALT_THRESHOLD) {
+          shouldBreak = true;
+        }
+        if (i > 0 && !shouldBreak) {
+          const prev = visible[i - 1];
+          const deltaE = Math.abs(p.E - prev.E);
+          const deltaN = Math.abs(p.N - prev.N);
+          if (deltaE > ENU_JUMP_THRESHOLD || deltaN > ENU_JUMP_THRESHOLD) {
+            shouldBreak = true;
+          }
+        }
+
+        if (shouldBreak) {
+          if (currentSegment.length > 0) {
+            paths.push(currentSegment.join(' '));
+            currentSegment = [];
+          }
+        } else {
+          const cmd = currentSegment.length === 0 ? 'M' : 'L';
+          currentSegment.push(`${cmd} ${xScale(p.E).toFixed(2)} ${yScale(p.U).toFixed(2)}`);
+        }
+      }
+
+      if (currentSegment.length > 0) {
+        paths.push(currentSegment.join(' '));
+      }
     }
   }
 
-  // Identify special dates for labeling
   const labeledPoints: Array<{ point: typeof visible[0]; label: string; isSpecial: boolean }> = [];
   
-  if (hasVisible && visible.length > 0) {
+  if (view !== 'az-alt' && hasVisible && visible.length > 0) {
     // Approximate dates for equinoxes and solstices (2024 values, close enough for most years)
     const specialDates = [
       { date: '03-20', label: 'Spring Equinox (Mar 20)', isSpecial: true },
@@ -245,7 +432,7 @@ function AnalemmaChartSVG({ points, label }: { points: AnalemmaPoint[]; label: s
             <g key={`xt${i}`}>
               <line x1={x} y1={size.h - padding} x2={x} y2={size.h - padding + 6} stroke="#bbb" />
               <text x={x} y={size.h - padding + 18} fontSize={10} fill="#777" textAnchor="middle">
-                {e.toFixed(2)}
+                {view === 'az-alt' ? azLabelFor(e).toFixed(0) : e.toFixed(2)}
               </text>
             </g>
           );
@@ -262,8 +449,17 @@ function AnalemmaChartSVG({ points, label }: { points: AnalemmaPoint[]; label: s
           );
         })}
         {/* Axis labels */}
-        <text x={padding} y={size.h - padding + 14} fontSize={12} fill="#777">East ←→ West</text>
-        <text x={size.w - padding + 6} y={padding} fontSize={12} fill="#777" transform={`rotate(90 ${size.w - padding + 6} ${padding})`}>Elevation</text>
+        {view === 'az-alt' ? (
+          <>
+            <text x={padding} y={size.h - padding + 14} fontSize={12} fill="#777">Azimuth (°)</text>
+            <text x={size.w - padding + 6} y={padding} fontSize={12} fill="#777" transform={`rotate(90 ${size.w - padding + 6} ${padding})`}>Altitude (°)</text>
+          </>
+        ) : (
+          <>
+            <text x={padding} y={size.h - padding + 14} fontSize={12} fill="#777">East ←→ West</text>
+            <text x={size.w - padding + 6} y={padding} fontSize={12} fill="#777" transform={`rotate(90 ${size.w - padding + 6} ${padding})`}>Elevation</text>
+          </>
+        )}
         {/* No daylight message */}
         {hasVisible ? null : (
           <text x={size.w / 2} y={size.h / 2} textAnchor="middle" fill="#777">No daylight at this solar time for this location.</text>
@@ -273,7 +469,7 @@ function AnalemmaChartSVG({ points, label }: { points: AnalemmaPoint[]; label: s
           <path key={idx} d={path} fill="none" stroke="#0b6cfb" strokeWidth={2} />
         ))}
         {/* Date labels with leader lines */}
-        {labeledPoints.map((lp, idx) => {
+        {view === 'az-alt' ? null : labeledPoints.map((lp, idx) => {
           const x = xScale(lp.point.E);
           const y = yScale(lp.point.U);
           
@@ -386,7 +582,21 @@ function AnalemmaChartSVG({ points, label }: { points: AnalemmaPoint[]; label: s
         {/* Regular markers for all other points */}
         {visible.map((p, idx) => {
           const isLabeled = labeledPoints.some(lp => lp.point.dateISO === p.dateISO);
-          if (isLabeled) return null;
+          if (view !== 'az-alt' && isLabeled) return null;
+          if (view === 'az-alt') {
+            const azVals = visible.map(pp => pp.azimuthDeg);
+            const refAz = azVals.length ? [...azVals].sort((a, b) => a - b)[Math.floor(azVals.length / 2)] : 180;
+            const unwrapAz = (azDeg: number) => {
+              const d = ((azDeg - refAz + 540) % 360) - 180;
+              return refAz + d;
+            };
+            return (
+              <g key={idx}>
+                <circle cx={xScale(unwrapAz(p.azimuthDeg))} cy={yScale(p.altitudeDeg)} r={2.25} fill="#0b6cfb" stroke="#084fc8" strokeWidth={0.5} />
+                <title>{`${label}\n${p.dateISO}\nAlt ${p.altitudeDeg.toFixed(1)}°, Az ${p.azimuthDeg.toFixed(1)}°`}</title>
+              </g>
+            );
+          }
           return (
             <g key={idx}>
               <circle cx={xScale(p.E)} cy={yScale(p.U)} r={2.5} fill="#0b6cfb" stroke="#084fc8" strokeWidth={0.5} />
@@ -620,6 +830,7 @@ function SkyDomeChartSVG({
 }
 
 export default function App() {
+  const [mainAnalemmaView, setMainAnalemmaView] = useState<'enu-eu' | 'az-alt' | 'polar'>('enu-eu');
   const [locationQuery, setLocationQuery] = useState('');
   const [latitude, setLatitude] = useState(51.5);
   const [longitude, setLongitude] = useState(-0.13);
@@ -1222,9 +1433,29 @@ export default function App() {
               <div className="chart-panel" aria-label="Main analemma chart">
                 <div className="chart-panel-body">
                   <div style={{ flex: 1, minHeight: 0 }}>
-                    <AnalemmaChartSVG points={points} label={locationLabel} />
+                    <AnalemmaChartSVG points={points} label={locationLabel} view={mainAnalemmaView} />
                   </div>
                   <div style={{ marginTop: 8, fontSize: 12, color: '#666', flex: '0 0 auto' }}>
+                    <label htmlFor="mainAnalemmaView" style={{ marginRight: 8 }}>
+                      <strong>View</strong>
+                    </label>
+                    <select
+                      id="mainAnalemmaView"
+                      value={mainAnalemmaView}
+                      onChange={(e) => setMainAnalemmaView(e.target.value as any)}
+                      style={{ marginRight: 16 }}
+                    >
+                      <option value="enu-eu">E–U (projection)</option>
+                      <option value="az-alt">Az–Alt</option>
+                      <option value="polar">Polar (sky projection)</option>
+                    </select>
+                    <span style={{ marginRight: 16 }}>
+                      {mainAnalemmaView === 'enu-eu'
+                        ? 'E vs U projection (drops N).'
+                        : mainAnalemmaView === 'az-alt'
+                          ? 'Azimuth/altitude in degrees (linear).'
+                          : 'Same projection as the sky-dome.'}
+                    </span>
                     <strong>Debug</strong>: visible={vis.length} {azMin !== undefined ? `| Az ${azMin.toFixed(1)}°…${azMax!.toFixed(1)}°` : ''} {altMinVis !== undefined ? `| Alt ${altMinVis.toFixed(1)}°…${altMaxVis!.toFixed(1)}°` : ''}
                     {cameraAzimuth !== undefined && cameraAltitude !== undefined && (
                       <span style={{ marginLeft: 16 }}>
